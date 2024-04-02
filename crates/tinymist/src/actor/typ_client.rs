@@ -80,7 +80,7 @@ pub struct CompileHandler {
     #[cfg(feature = "preview")]
     pub(super) inner: Arc<Mutex<Option<typst_preview::CompilationHandleImpl>>>,
 
-    pub(super) doc_tx: watch::Sender<Option<Arc<TypstDocument>>>,
+    pub(super) doc_tx: watch::Sender<Option<VersionedDocument>>,
     pub(super) render_tx: broadcast::Sender<RenderActorRequest>,
     pub(super) diag_tx: DiagnosticsSender,
 }
@@ -98,7 +98,11 @@ impl CompilationHandle for CompileHandler {
 
     fn notify_compile(&self, res: Result<Arc<TypstDocument>, CompileStatus>) {
         if let Ok(doc) = res.clone() {
-            let _ = self.doc_tx.send(Some(doc.clone()));
+            // todo: versioned document
+            let _ = self.doc_tx.send(Some(VersionedDocument {
+                version: 0,
+                document: doc.clone(),
+            }));
             // todo: is it right that ignore zero broadcast receiver?
             let _ = self.render_tx.send(RenderActorRequest::OnTyped);
         }
@@ -114,8 +118,17 @@ impl CompilationHandle for CompileHandler {
 }
 
 impl CompileHandler {
-    fn push_diagnostics(&mut self, diagnostics: Option<DiagnosticsMap>) {
-        let err = self.diag_tx.send((self.diag_group.clone(), diagnostics));
+    pub fn push_diagnostics(
+        &mut self,
+        diagnostics: Option<DiagnosticsMap>,
+        suffix: Option<&'static str>,
+    ) {
+        let g = match suffix {
+            Some(suffix) => format!("{}:{}", self.diag_group, suffix),
+            None => self.diag_group.clone(),
+        };
+
+        let err = self.diag_tx.send((g, diagnostics));
         if let Err(err) = err {
             error!("failed to send diagnostics: {:#}", err);
         }
@@ -171,11 +184,12 @@ impl CompileDriver {
                 // todo: check all errors in this file
                 let detached = self.inner.world().entry.is_inactive();
                 let valid = !detached;
-                self.handler.push_diagnostics(valid.then_some(diagnostics));
+                self.handler
+                    .push_diagnostics(valid.then_some(diagnostics), None);
             }
             Err(err) => {
                 log::error!("TypstActor: failed to convert diagnostics: {:#}", err);
-                self.handler.push_diagnostics(None);
+                self.handler.push_diagnostics(None, None);
             }
         }
     }
@@ -334,16 +348,25 @@ impl CompileClientActor {
                 }))
                 .unwrap();
 
-            // todo
             let res = self.steal(move |compiler| {
                 compiler.change_entry(next.clone());
 
                 let next_is_inactive = next.is_inactive();
                 let res = compiler.compiler.world_mut().mutate_entry(next);
 
+                // todo: more clear way
                 if next_is_inactive {
                     info!("TypstActor: removing diag");
-                    compiler.compiler.compiler.handler.push_diagnostics(None);
+                    compiler
+                        .compiler
+                        .compiler
+                        .handler
+                        .push_diagnostics(None, None);
+                    compiler
+                        .compiler
+                        .compiler
+                        .handler
+                        .push_diagnostics(None, Some("grammar"));
                 }
 
                 res.map(|_| ())

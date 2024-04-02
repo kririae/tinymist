@@ -21,5 +21,13 @@ fn main() -> Result<()> {
         .expect("Typst should be a dependency");
 
     println!("cargo:rustc-env=TYPST_VERSION={}", typst.version);
+
+    nlprule_build::BinaryBuilder::new(
+        &["en"],
+        std::env::var("OUT_DIR").expect("OUT_DIR is set when build.rs is running"),
+    )
+    .build()?
+    .validate()?;
+
     Ok(())
 }

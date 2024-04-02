@@ -2,11 +2,15 @@
 
 pub mod cluster;
 mod formatting;
+pub mod grammar;
 pub mod render;
 pub mod typ_client;
 pub mod typ_server;
 
-use tokio::sync::{broadcast, watch};
+use tokio::{
+    select,
+    sync::{broadcast, watch},
+};
 use typst::util::Deferred;
 use typst_ts_compiler::{
     service::CompileDriverImpl,
@@ -16,11 +20,13 @@ use typst_ts_core::config::compiler::EntryState;
 
 use self::{
     formatting::run_format_thread,
+    grammar::GrammarActor,
     render::{ExportActor, ExportConfig},
     typ_client::{CompileClientActor, CompileDriver, CompileHandler},
     typ_server::CompileServerActor,
 };
 use crate::{
+    actor::grammar::VersionedSuggestions,
     compiler::CompileServer,
     world::{ImmutDict, LspWorld, LspWorldBuilder},
     TypstLanguageServer,
@@ -38,6 +44,7 @@ impl CompileServer {
         inputs: ImmutDict,
     ) -> CompileClientActor {
         let (doc_tx, doc_rx) = watch::channel(None);
+        let (suggestion_tx, suggestion_rx) = tokio::sync::mpsc::channel(10);
         let (render_tx, _) = broadcast::channel(10);
 
         // Run the Export actor before preparing cluster to avoid loss of events
@@ -53,6 +60,10 @@ impl CompileServer {
             )
             .run(),
         );
+
+        // Run the Export actor before preparing cluster to avoid loss of events
+        self.handle
+            .spawn(GrammarActor::new(render_tx.subscribe(), doc_rx.clone(), suggestion_tx).run());
 
         // Take all dirty files in memory as the initial snapshot
         let snapshot = FileChangeSet::default();
@@ -103,6 +114,34 @@ impl CompileServer {
                 client
             }
         });
+
+        {
+            let c = inner.clone();
+            self.handle.spawn(async move {
+                let c = c.wait();
+                let mut suggestion_rx = suggestion_rx;
+                'suggestion_loop: loop {
+                    select! {
+                        s = suggestion_rx.recv() => {
+                            // Option<Vec<checkers::nlprule::Suggestion>>
+                            let s = match s {
+                                Some(VersionedSuggestions {  suggestions, .. }) => {
+                                    suggestions
+                                },
+                                _ => {
+                                    break 'suggestion_loop;
+                                }
+                            };
+                            c.steal_async(|c, _| {
+                                c.compiler.compiler.notify_suggestions(s)
+                            }).await.ok();
+                        }
+                    }
+                }
+
+                log::info!("TypstActor: suggestions channel closed");
+            });
+        }
 
         CompileClientActor::new(diag_group, self.config.clone(), entry, inner, render_tx)
     }

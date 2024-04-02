@@ -9,7 +9,7 @@ use anyhow::Context;
 use log::{error, info};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use tinymist_query::{ExportKind, PageSelection};
+use tinymist_query::{ExportKind, PageSelection, VersionedDocument};
 use tokio::sync::{
     broadcast::{self, error::RecvError},
     oneshot, watch,
@@ -49,7 +49,7 @@ pub struct ExportConfig {
 
 pub struct ExportActor {
     render_rx: broadcast::Receiver<RenderActorRequest>,
-    document: watch::Receiver<Option<Arc<TypstDocument>>>,
+    document: watch::Receiver<Option<VersionedDocument>>,
 
     pub substitute_pattern: String,
     pub entry: EntryState,
@@ -59,7 +59,7 @@ pub struct ExportActor {
 
 impl ExportActor {
     pub fn new(
-        document: watch::Receiver<Option<Arc<TypstDocument>>>,
+        document: watch::Receiver<Option<VersionedDocument>>,
         render_rx: broadcast::Receiver<RenderActorRequest>,
         config: ExportConfig,
     ) -> Self {
@@ -170,17 +170,17 @@ impl ExportActor {
                 let mode = self.mode;
                 info!(
                     "RenderActor: validating document for export mode {mode:?} title is {title}",
-                    title = document.title.is_some()
+                    title = document.document.title.is_some()
                 );
                 if mode == ExportMode::OnDocumentHasTitle {
-                    break 'validate_doc document.title.is_some()
+                    break 'validate_doc document.document.title.is_some()
                         && matches!(req, RenderActorRequest::OnSaved(..));
                 }
 
                 false
             };
         if should_do {
-            return match self.export(kind, &document, &root, &path).await {
+            return match self.export(kind, &document.document, &root, &path).await {
                 Ok(pdf) => Some(pdf),
                 Err(err) => {
                     error!("RenderActor({kind:?}): failed to export {err}", err = err);
