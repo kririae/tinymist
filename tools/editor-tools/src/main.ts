@@ -6,12 +6,14 @@ import { Tracing } from "./features/tracing";
 import { Summary } from "./features/summary";
 import { Diagnostics } from "./features/diagnostics";
 import { SymbolPicker } from "./features/symbol-view";
+import { Export } from "./features/export";
 
 /// The components that can be rendered by the frontend.
 /// Typically, each component corresponds to a single tool (Application).
 type PageComponent =
   | "template-gallery"
   | "tracing"
+  | "export"
   | "summary"
   | "diagnostics"
   | "symbol-view";
@@ -31,7 +33,7 @@ function retrieveArgs(): Arguments {
   ///   let frontend_html = frontend_html.replace(
   ///     "editor-tools-args:{}", ...);
   /// ```
-  let mode = `editor-tools-args:{"page": "symbol-view"}`;
+  let mode = `editor-tools-args:{"page": "export"}`;
   /// Remove the placeholder prefix.
   mode = mode.replace("editor-tools-args:", "");
 
@@ -51,6 +53,9 @@ function main() {
       break;
     case "tracing":
       van.add(appHook, Tracing());
+      break;
+    case "export":
+      van.add(appHook, Export());
       break;
     case "summary":
       van.add(appHook, Summary());
